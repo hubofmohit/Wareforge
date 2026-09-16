@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Warehouse Designer — Admin</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="admin.css" />
+  <meta name="robots" content="noindex, nofollow" />
+</head>
+<body>
+  <div class="pricing-page">
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <h1>Warehouse Designer</h1>
+          <p class="brand-sub">Admin</p>
+        </div>
+      </div>
+    </header>
+
+    <main class="pricing-main">
+      <div class="legal-content admin-content">
+
+        <div id="adminAuthGate" class="pricing-card">
+          <h2 class="admin-card-title">Admin access</h2>
+          <p class="pricing-note admin-note-spaced">This secret is set as ADMIN_SECRET in your Netlify environment variables.</p>
+          <label>
+            <span class="field-label">Admin secret</span>
+            <input type="password" id="adminSecretInput" autocomplete="off" />
+          </label>
+          <button type="button" id="adminUnlockBtn" class="add-zone-btn pricing-subscribe-btn admin-unlock-btn">Unlock</button>
+          <p class="pricing-note admin-auth-error" id="adminAuthError"></p>
+        </div>
+
+        <div id="adminPanel" class="admin-panel">
+
+          <div class="pricing-card admin-form-card">
+            <h2 class="admin-card-title">Grant access</h2>
+            <form id="createTenantForm" class="recover-form">
+              <label>
+                <span class="field-label">Email (optional — for your own reference)</span>
+                <input type="email" id="newTenantEmail" placeholder="user@example.com" autocomplete="off" />
+              </label>
+              <button type="submit" class="add-zone-btn pricing-subscribe-btn">Create access link</button>
+            </form>
+            <p class="pricing-note admin-result-note" id="createTenantResult"></p>
+          </div>
+
+          <div class="pricing-card admin-card-spaced admin-list-card">
+            <h2 class="admin-card-title">
+              All users (<span id="tenantCount">0</span>)
+            </h2>
+            <div class="admin-search-wrap">
+              <input type="text" id="tenantSearchInput" class="search-input" placeholder="Search by email…" autocomplete="off" />
+              <select id="tenantStatusFilter" class="location-select admin-status-filter">
+                <option value="all">All statuses</option>
+                <option value="active">Active only</option>
+                <option value="inactive">Inactive only</option>
+              </select>
+            </div>
+            <p class="pricing-note admin-loading-note" id="tenantListLoading">Loading…</p>
+            <div id="tenantListWrap">
+              <p class="pricing-note" id="tenantListEmpty">No users yet.</p>
+              <ul class="history-list admin-scroll-list" id="tenantList" style="display:none;"></ul>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ==========================================================
+       MANAGE MEMBERS MODAL — per-tenant member list + invite form.
+       Only "editor" and "viewer" roles are creatable here. "admin"
+       is intentionally never offered: there is exactly one admin
+       (whoever holds ADMIN_SECRET), and that isn't a member row at
+       all — it's the separate admin-panel login above.
+       ========================================================== -->
+  <div id="membersModalOverlay" class="members-modal-overlay">
+    <div id="membersModalBackdrop" class="members-modal-backdrop"></div>
+    <div class="table-view-panel members-modal-panel" role="dialog" aria-modal="true" aria-labelledby="membersModalTitle">
+      <header class="table-view-header">
+        <h2 id="membersModalTitle">Members</h2>
+        <button type="button" class="chip-btn" id="membersModalCloseBtn">✕ Close</button>
+      </header>
+
+      <div class="members-modal-body">
+        <p class="pricing-note admin-loading-note" id="membersLoading">Loading…</p>
+        <p class="pricing-note members-empty-note" id="membersEmpty">No members yet — just the tenant's original link.</p>
+        <ul class="history-list" id="membersList"></ul>
+      </div>
+
+      <form id="createMemberForm" class="table-add-row-form member-invite-form">
+        <input type="text" id="newMemberName" class="member-invite-name" placeholder="Name (optional)" autocomplete="off" />
+        <select id="newMemberRole" class="location-select member-invite-role">
+          <option value="editor">Editor</option>
+          <option value="viewer">Viewer</option>
+        </select>
+        <button type="submit" class="btn-primary">
+          <span class="btn-icon" aria-hidden="true">+</span>
+          Invite
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+
+  <script>
+    const adminAuthGate = document.getElementById("adminAuthGate");
+    const adminPanel = document.getElementById("adminPanel");
+    const adminSecretInput = document.getElementById("adminSecretInput");
+    const adminUnlockBtn = document.getElementById("adminUnlockBtn");
+    const adminAuthError = document.getElementById("adminAuthError");
+    const createTenantForm = document.getElementById("createTenantForm");
+    const newTenantEmail = document.getElementById("newTenantEmail");
+    const createTenantResult = document.getElementById("createTenantResult");
+    const tenantCount = document.getElementById("tenantCount");
+    const tenantList = document.getElementById("tenantList");
+    const tenantListEmpty = document.getElementById("tenantListEmpty");
+    const tenantListLoading = document.getElementById("tenantListLoading");
+    const tenantSearchInput = document.getElementById("tenantSearchInput");
+    const tenantStatusFilter = document.getElementById("tenantStatusFilter");
+    const toastContainer = document.getElementById("toastContainer");
+
+    const membersModalOverlay = document.getElementById("membersModalOverlay");
+    const membersModalBackdrop = document.getElementById("membersModalBackdrop");
+    const membersModalCloseBtn = document.getElementById("membersModalCloseBtn");
+    const membersModalTitle = document.getElementById("membersModalTitle");
+    const membersList = document.getElementById("membersList");
+    const membersEmpty = document.getElementById("membersEmpty");
+    const membersLoading = document.getElementById("membersLoading");
+    const createMemberForm = document.getElementById("createMemberForm");
+    const newMemberName = document.getElementById("newMemberName");
+    const newMemberRole = document.getElementById("newMemberRole");
+
+    let activeMembersTenantId = null;
+    let allTenants = []; // last-loaded tenant list, filtered client-side by the search box
+
+    // Kept only in sessionStorage (cleared when the tab closes), never
+    // localStorage — this secret grants full access to every tenant's
+    // data, so it shouldn't linger longer than it has to.
+    const SECRET_KEY = "warehouseDesignerAdminSecret";
+    let adminSecret = sessionStorage.getItem(SECRET_KEY) || "";
+
+    function showToast(message, variant) {
+      const toast = document.createElement("div");
+      toast.className = "toast" + (variant ? ` toast--${variant}` : "");
+      toast.textContent = message;
+      toastContainer.appendChild(toast);
+      setTimeout(() => {
+        toast.classList.add("toast--leaving");
+        toast.addEventListener("animationend", () => toast.remove(), { once: true });
+        setTimeout(() => toast.remove(), 400);
+      }, 2400);
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement("div");
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    async function adminFetch(path, options = {}) {
+      const res = await fetch(path, {
+        ...options,
+        headers: { ...(options.headers || {}), "x-admin-secret": adminSecret },
+      });
+      if (res.status === 401) throw new Error("UNAUTHORIZED");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Request failed");
+      return data;
+    }
+
+    async function unlock() {
+      adminSecret = adminSecretInput.value;
+      adminAuthError.style.display = "none";
+      adminUnlockBtn.disabled = true;
+      adminUnlockBtn.textContent = "Checking…";
+
+      try {
+        await loadTenants(); // also doubles as an auth check
+        sessionStorage.setItem(SECRET_KEY, adminSecret);
+        adminAuthGate.style.display = "none";
+        adminPanel.classList.add("open");
+      } catch (err) {
+        adminAuthError.textContent = err.message === "UNAUTHORIZED" ? "Wrong secret." : "Couldn't reach the server.";
+        adminAuthError.style.display = "";
+      } finally {
+        adminUnlockBtn.disabled = false;
+        adminUnlockBtn.textContent = "Unlock";
+      }
+    }
+
+    adminUnlockBtn.addEventListener("click", unlock);
+    adminSecretInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") unlock();
+    });
+
+    async function loadTenants() {
+      tenantListLoading.classList.add("showing");
+      tenantListEmpty.style.display = "none";
+      tenantList.style.display = "none";
+      try {
+        const data = await adminFetch("/.netlify/functions/admin-list-tenants");
+        allTenants = data.tenants || [];
+        renderTenants(filterTenants(allTenants));
+      } finally {
+        tenantListLoading.classList.remove("showing");
+      }
+    }
+
+    function filterTenants(tenants) {
+      const q = tenantSearchInput.value.trim().toLowerCase();
+      const status = tenantStatusFilter.value;
+      return tenants.filter((t) => {
+        if (q && !(t.email || "").toLowerCase().includes(q)) return false;
+        if (status === "active" && !t.isActive) return false;
+        if (status === "inactive" && t.isActive) return false;
+        return true;
+      });
+    }
+
+    tenantSearchInput.addEventListener("input", () => renderTenants(filterTenants(allTenants)));
+    tenantStatusFilter.addEventListener("change", () => renderTenants(filterTenants(allTenants)));
+
+    function renderTenants(tenants) {
+      tenantCount.textContent = tenants.length;
+      if (!tenants.length) {
+        tenantListEmpty.style.display = "";
+        const filtered = tenantSearchInput.value.trim() || tenantStatusFilter.value !== "all";
+        tenantListEmpty.textContent = allTenants.length && filtered ? "No users match your filters." : "No users yet.";
+        tenantList.style.display = "none";
+        return;
+      }
+      tenantListEmpty.style.display = "none";
+      tenantList.style.display = "";
+      tenantList.innerHTML = "";
+
+      tenants.forEach((t) => {
+        const li = document.createElement("li");
+        li.className = "history-item admin-row" + (t.isActive ? "" : " is-inactive");
+        const created = new Date(t.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+        li.innerHTML = `
+          <div class="history-item__body">
+            <div class="history-item__text">
+              <strong>${t.email ? escapeHtml(t.email) : "(no email)"}</strong>
+              <span class="tenant-meta-line"> — ${t.warehouseCount} location${t.warehouseCount === 1 ? "" : "s"}, ${t.memberCount} member${t.memberCount === 1 ? "" : "s"}</span>
+              ${t.isActive ? "" : '<span class="inactive-tag">Inactive</span>'}
+            </div>
+            <div class="history-item__time">Created ${created}</div>
+          </div>
+          <div class="tenant-row-actions">
+            <button type="button" class="chip-btn" data-members="${t.id}" data-tenant-label="${escapeHtml(t.email || "(no email)")}">Manage members</button>
+            <button type="button" class="chip-btn" data-copy="${escapeHtml(t.accessUrl)}">Copy link</button>
+            <button type="button" class="chip-btn${t.isActive ? " chip-btn--danger" : ""}" data-toggle-tenant="${t.id}" data-tenant-active="${t.isActive}" data-tenant-label="${escapeHtml(t.email || "(no email)")}">${t.isActive ? "Deactivate" : "Activate"}</button>
+            <button type="button" class="chip-btn chip-btn--danger" data-delete-tenant="${t.id}" data-tenant-label="${escapeHtml(t.email || "(no email)")}">Delete</button>
+          </div>
+        `;
+        tenantList.appendChild(li);
+      });
+    }
+
+    tenantList.addEventListener("click", async (e) => {
+      const copyBtn = e.target.closest("button[data-copy]");
+      if (copyBtn) {
+        try {
+          await navigator.clipboard.writeText(copyBtn.dataset.copy);
+          showToast("Link copied", "success");
+        } catch {
+          showToast("Couldn't copy — select and copy manually");
+        }
+        return;
+      }
+
+      const deleteBtn = e.target.closest("button[data-delete-tenant]");
+      if (deleteBtn) {
+        const tenantId = deleteBtn.dataset.deleteTenant;
+        const label = deleteBtn.dataset.tenantLabel;
+        if (!confirm(`Delete "${label}" completely? This removes every location, zone, item, and member under it — this can't be undone.`)) return;
+        deleteBtn.disabled = true;
+        deleteBtn.textContent = "Deleting…";
+        try {
+          await adminFetch("/.netlify/functions/admin-delete-tenant", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tenantId }),
+          });
+          showToast(`Deleted "${label}"`, "success");
+          loadTenants();
+        } catch (err) {
+          showToast(err.message === "UNAUTHORIZED" ? "Session expired — reload and unlock again" : "Couldn't delete tenant", "danger");
+          deleteBtn.disabled = false;
+          deleteBtn.textContent = "Delete";
+        }
+        return;
+      }
+
+      const toggleBtn = e.target.closest("button[data-toggle-tenant]");
+      if (toggleBtn) {
+        const tenantId = toggleBtn.dataset.toggleTenant;
+        const currentlyActive = toggleBtn.dataset.tenantActive === "true";
+        const label = toggleBtn.dataset.tenantLabel;
+        if (currentlyActive && !confirm(`Deactivate "${label}"? Every link under this tenant — including its own — stops working until you reactivate it. Nothing is deleted.`)) return;
+        toggleBtn.disabled = true;
+        toggleBtn.textContent = currentlyActive ? "Deactivating…" : "Activating…";
+        try {
+          await adminFetch("/.netlify/functions/admin-set-tenant-active", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tenantId, active: !currentlyActive }),
+          });
+          showToast(currentlyActive ? `Deactivated "${label}"` : `Activated "${label}"`, "success");
+          loadTenants();
+        } catch (err) {
+          showToast(err.message === "UNAUTHORIZED" ? "Session expired — reload and unlock again" : "Couldn't update status", "danger");
+          toggleBtn.disabled = false;
+          toggleBtn.textContent = currentlyActive ? "Deactivate" : "Activate";
+        }
+      }
+    });
+
+    createTenantForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const submitBtn = createTenantForm.querySelector("button[type=submit]");
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Creating…";
+      createTenantResult.style.display = "none";
+
+      try {
+        const data = await adminFetch("/.netlify/functions/admin-create-tenant", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: newTenantEmail.value }),
+        });
+
+        createTenantResult.innerHTML = `Created: <a href="${data.accessUrl}" target="_blank">${data.accessUrl}</a>`;
+        createTenantResult.style.display = "";
+        newTenantEmail.value = "";
+        showToast("Access link created — copy it and send it yourself", "success");
+        loadTenants();
+      } catch (err) {
+        showToast(err.message === "UNAUTHORIZED" ? "Session expired — reload and unlock again" : "Couldn't create access link", "danger");
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Create access link";
+      }
+    });
+
+    /* ---------- manage members modal ---------- */
+
+    function openMembersModal(tenantId, tenantLabel) {
+      activeMembersTenantId = tenantId;
+      membersModalTitle.textContent = `Members — ${tenantLabel}`;
+      newMemberName.value = "";
+      newMemberRole.value = "editor";
+      membersModalOverlay.classList.add("open");
+      loadMembers();
+    }
+
+    function closeMembersModal() {
+      membersModalOverlay.classList.remove("open");
+      activeMembersTenantId = null;
+    }
+
+    membersModalBackdrop.addEventListener("click", closeMembersModal);
+    membersModalCloseBtn.addEventListener("click", closeMembersModal);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && membersModalOverlay.classList.contains("open")) closeMembersModal();
+    });
+
+    tenantList.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-members]");
+      if (!btn) return;
+      openMembersModal(btn.dataset.members, btn.dataset.tenantLabel);
+    });
+
+    async function loadMembers() {
+      if (!activeMembersTenantId) return;
+      membersList.innerHTML = "";
+      membersEmpty.style.display = "none";
+      membersLoading.classList.add("showing");
+      try {
+        const data = await adminFetch(`/.netlify/functions/admin-list-members?tenantId=${encodeURIComponent(activeMembersTenantId)}`);
+        renderMembers(data.members || []);
+      } catch (err) {
+        showToast(err.message === "UNAUTHORIZED" ? "Session expired — reload and unlock again" : "Couldn't load members", "danger");
+      } finally {
+        membersLoading.classList.remove("showing");
+      }
+    }
+
+    function renderMembers(members) {
+      if (!members.length) {
+        membersEmpty.style.display = "";
+        membersList.innerHTML = "";
+        return;
+      }
+      membersEmpty.style.display = "none";
+      membersList.innerHTML = "";
+      members.forEach((m) => {
+        const created = new Date(m.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+        const isAdmin = m.role === "admin"; // the tenant's own root link — not editable here
+        const li = document.createElement("li");
+        li.className = "history-item member-row admin-row" + (m.isActive ? "" : " is-inactive");
+        li.dataset.memberId = m.id;
+        li.dataset.memberName = m.name || "";
+        li.dataset.memberRole = m.role;
+        li.dataset.memberActive = m.isActive;
+
+        li.innerHTML = `
+          <div class="history-item__body view-mode">
+            <div class="history-item__text">
+              <strong>${m.name ? escapeHtml(m.name) : "(unnamed)"}</strong>
+              <span class="member-role-badge member-role-badge--${escapeHtml(m.role)}">${escapeHtml(m.role)}</span>
+              ${isAdmin ? '<span class="member-owner-tag">(tenant owner)</span>' : ""}
+              ${m.isActive ? "" : '<span class="inactive-tag">Inactive</span>'}
+            </div>
+            <div class="history-item__time">Created ${created}</div>
+          </div>
+          <div class="edit-mode">
+            <input type="text" class="member-edit-name" placeholder="Name" value="${escapeHtml(m.name || "")}" />
+            <select class="member-edit-role location-select">
+              <option value="editor" ${m.role === "editor" ? "selected" : ""}>Editor</option>
+              <option value="viewer" ${m.role === "viewer" ? "selected" : ""}>Viewer</option>
+            </select>
+          </div>
+          <div class="member-row-actions">
+            <button type="button" class="chip-btn member-copy-btn" data-copy="${escapeHtml(m.accessUrl)}">Copy link</button>
+            ${
+              isAdmin
+                ? ""
+                : `<button type="button" class="chip-btn member-edit-btn">Edit</button>
+                   <button type="button" class="chip-btn member-save-btn">Save</button>
+                   <button type="button" class="chip-btn member-cancel-btn">Cancel</button>
+                   <button type="button" class="chip-btn${m.isActive ? " chip-btn--danger" : ""} member-toggle-btn">${m.isActive ? "Deactivate" : "Activate"}</button>
+                   <button type="button" class="chip-btn chip-btn--danger member-delete-btn">Remove</button>`
+            }
+          </div>
+        `;
+        membersList.appendChild(li);
+      });
+    }
+
+    // Single source of truth: the .editing class on the row. Every
+    // element that needs to show/hide based on edit state is driven
+    // purely by CSS rules keyed off ".member-row.editing" (see
+    // admin.css) — nothing here ever sets an inline "display" value,
+    // which is exactly what caused the earlier bug (two conflicting
+    // inline "display" declarations on the same element).
+    function setMemberRowEditing(li, editing) {
+      li.classList.toggle("editing", editing);
+      if (editing) {
+        // Reset fields back to the last-known values each time editing
+        // starts, so a previously cancelled edit doesn't linger.
+        li.querySelector(".member-edit-name").value = li.dataset.memberName;
+        li.querySelector(".member-edit-role").value = li.dataset.memberRole;
+      }
+    }
+
+    membersList.addEventListener("click", async (e) => {
+      const li = e.target.closest("li[data-member-id]");
+      if (!li) return;
+
+      const copyBtn = e.target.closest(".member-copy-btn");
+      if (copyBtn) {
+        try {
+          await navigator.clipboard.writeText(copyBtn.dataset.copy);
+          showToast("Link copied", "success");
+        } catch {
+          showToast("Couldn't copy — select and copy manually");
+        }
+        return;
+      }
+
+      if (e.target.closest(".member-edit-btn")) {
+        setMemberRowEditing(li, true);
+        return;
+      }
+
+      if (e.target.closest(".member-cancel-btn")) {
+        setMemberRowEditing(li, false);
+        return;
+      }
+
+      if (e.target.closest(".member-save-btn")) {
+        const memberId = li.dataset.memberId;
+        const newName = li.querySelector(".member-edit-name").value.trim();
+        const newRole = li.querySelector(".member-edit-role").value;
+        const saveBtn = e.target.closest(".member-save-btn");
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Saving…";
+        try {
+          await adminFetch("/.netlify/functions/admin-update-member", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ memberId, name: newName, role: newRole }),
+          });
+          showToast("Member updated", "success");
+          loadMembers();
+        } catch (err) {
+          showToast(err.message === "UNAUTHORIZED" ? "Session expired — reload and unlock again" : "Couldn't update member", "danger");
+          saveBtn.disabled = false;
+          saveBtn.textContent = "Save";
+        }
+        return;
+      }
+
+      if (e.target.closest(".member-delete-btn")) {
+        const memberId = li.dataset.memberId;
+        const label = li.dataset.memberName || "(unnamed)";
+        if (!confirm(`Remove ${label}'s access? Their link will stop working immediately.`)) return;
+        const deleteBtn = e.target.closest(".member-delete-btn");
+        deleteBtn.disabled = true;
+        deleteBtn.textContent = "Removing…";
+        try {
+          await adminFetch("/.netlify/functions/admin-delete-member", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ memberId }),
+          });
+          showToast(`Removed ${label}`, "success");
+          loadMembers();
+        } catch (err) {
+          showToast(err.message === "UNAUTHORIZED" ? "Session expired — reload and unlock again" : "Couldn't remove member", "danger");
+          deleteBtn.disabled = false;
+          deleteBtn.textContent = "Remove";
+        }
+        return;
+      }
+
+      if (e.target.closest(".member-toggle-btn")) {
+        const memberId = li.dataset.memberId;
+        const label = li.dataset.memberName || "(unnamed)";
+        const currentlyActive = li.dataset.memberActive === "true";
+        if (currentlyActive && !confirm(`Deactivate ${label}'s access? Their link stops working until you reactivate it. Nothing is deleted.`)) return;
+        const toggleBtn = e.target.closest(".member-toggle-btn");
+        toggleBtn.disabled = true;
+        toggleBtn.textContent = currentlyActive ? "Deactivating…" : "Activating…";
+        try {
+          await adminFetch("/.netlify/functions/admin-set-member-active", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ memberId, active: !currentlyActive }),
+          });
+          showToast(currentlyActive ? `Deactivated ${label}` : `Activated ${label}`, "success");
+          loadMembers();
+        } catch (err) {
+          showToast(err.message === "UNAUTHORIZED" ? "Session expired — reload and unlock again" : "Couldn't update status", "danger");
+          toggleBtn.disabled = false;
+          toggleBtn.textContent = currentlyActive ? "Deactivate" : "Activate";
+        }
+      }
+    });
+
+    createMemberForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!activeMembersTenantId) return;
+      const submitBtn = createMemberForm.querySelector("button[type=submit]");
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Inviting…";
+
+      try {
+        await adminFetch("/.netlify/functions/admin-create-member", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tenantId: activeMembersTenantId,
+            name: newMemberName.value,
+            role: newMemberRole.value, // only "editor" or "viewer" ever appear in this <select>
+          }),
+        });
+        newMemberName.value = "";
+        newMemberRole.value = "editor";
+        showToast("Member invited", "success");
+        loadMembers();
+      } catch (err) {
+        showToast(err.message === "UNAUTHORIZED" ? "Session expired — reload and unlock again" : "Couldn't invite member", "danger");
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Invite";
+      }
+    });
+
+    // If a secret is already cached for this tab, skip straight to the panel.
+    if (adminSecret) {
+      adminSecretInput.value = adminSecret;
+      unlock();
+    }
+  </script>
+</body>
+</html>
